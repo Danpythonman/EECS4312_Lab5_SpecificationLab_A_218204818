@@ -80,6 +80,11 @@ def suggest_slots(
     WORK_END = _to_minutes("17:00")
     STEP = 15
 
+    # Friday cutoff: no meeting may start at or after 15:00
+    FRIDAY_CUTOFF = _to_minutes("15:00")
+    is_friday = d in {"fri", "friday"}
+    latest_start_cap = FRIDAY_CUTOFF if is_friday else WORK_END
+
     # Policy implied by your tests:
     # - 15-minute cooldown AFTER each event ends (but NOT after lunch).
     COOLDOWN_AFTER_EVENT = 15
@@ -123,8 +128,11 @@ def suggest_slots(
     results: List[str] = []
     for fs, fe in free:
         start = _ceil_to_grid(fs, STEP)
-        last_start = fe - meeting_duration
+        last_start = min(fe - meeting_duration, latest_start_cap - STEP)  # < 15:00 on Fridays
         while start <= last_start:
+            # Extra guard (covers edge cases where start lands at cutoff)
+            if is_friday and start >= FRIDAY_CUTOFF:
+                break
             results.append(_to_hhmm(start))
             start += STEP
 

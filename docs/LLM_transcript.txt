@@ -758,3 +758,173 @@ def test_meeting_duration_240_does_not_fit_if_afternoon_is_shortened():
 "
 
 --------------------------------------------------
+
+Prompt 5: "add logic so that events cannot be scheduled after 15:00 on fridays. and generate tests to confirm this"
+
+LLM Response 5: "```python
+from __future__ import annotations
+
+from typing import List, TypedDict
+
+
+class Event(TypedDict):
+    start: str
+    end: str
+
+
+def _to_minutes(hhmm: str) -> int:
+    h_str, m_str = hhmm.split(":")
+    h = int(h_str)
+    m = int(m_str)
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError(f"Invalid time: {hhmm}")
+    return h * 60 + m
+
+
+def _to_hhmm(minutes: int) -> str:
+    h = minutes // 60
+    m = minutes % 60
+    return f"{h:02d}:{m:02d}"
+
+
+def suggest_slots(
+    events: List[Event],
+    meeting_duration: int,
+    day: str
+) -> List[str]:
+    if meeting_duration <= 0:
+        raise ValueError("meeting_duration must be > 0")
+
+    d = day.strip().lower()
+
+    # Weekend blocking (string-based, do not parse ISO dates)
+    if d in {"sat", "saturday", "sun", "sunday"}:
+        return []
+
+    WORK_START = _to_minutes("09:00")
+    WORK_END = _to_minutes("17:00")
+    STEP = 15
+
+    # Friday cutoff: no meeting may start at or after 15:00
+    FRIDAY_CUTOFF = _to_minutes("15:00")
+    is_friday = d in {"fri", "friday"}
+    latest_start_cap = FRIDAY_CUTOFF if is_friday else WORK_END
+
+    COOLDOWN_AFTER_EVENT = 15
+
+    busy: List[tuple[int, int]] = []
+
+    def add_busy_interval(start_min: int, end_min: int) -> None:
+        s = max(start_min, WORK_START)
+        e = min(end_min, WORK_END)
+        if e > s:
+            busy.append((s, e))
+
+    # Add user events with cooldown after end
+    for e in events:
+        s = _to_minutes(e["start"])
+        t = _to_minutes(e["end"])
+        if t <= s:
+            raise ValueError(f"Event end must be after start: {e}")
+        add_busy_interval(s, t + COOLDOWN_AFTER_EVENT)
+
+    # Add lunch (no cooldown)
+    add_busy_interval(_to_minutes("12:00"), _to_minutes("13:00"))
+
+    # Merge busy intervals
+    busy.sort()
+    merged: List[tuple[int, int]] = []
+    for s, e in busy:
+        if not merged or s > merged[-1][1]:
+            merged.append((s, e))
+        else:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+
+    # Free intervals within workday
+    free: List[tuple[int, int]] = []
+    cursor = WORK_START
+    for s, e in merged:
+        if s > cursor:
+            free.append((cursor, s))
+        cursor = max(cursor, e)
+    if cursor < WORK_END:
+        free.append((cursor, WORK_END))
+
+    def ceil_to_grid(x: int, grid: int) -> int:
+        return ((x + grid - 1) // grid) * grid
+
+    # Enumerate valid starts
+    results: List[str] = []
+    for fs, fe in free:
+        start = ceil_to_grid(fs, STEP)
+        last_start = min(fe - meeting_duration, latest_start_cap - STEP)  # < 15:00 on Fridays
+        while start <= last_start:
+            # Extra guard (covers edge cases where start lands at cutoff)
+            if is_friday and start >= FRIDAY_CUTOFF:
+                break
+            results.append(_to_hhmm(start))
+            start += STEP
+
+    return results
+```
+
+Tests (pytest):
+
+```python
+def test_friday_cutoff_blocks_starts_at_and_after_15_00():
+    events = []
+    slots = suggest_slots(events, meeting_duration=30, day="Friday")
+
+    assert "14:45" in slots
+    assert "15:00" not in slots
+    assert "15:15" not in slots
+    assert "16:00" not in slots
+
+
+def test_friday_cutoff_allows_starts_before_15_00_if_meeting_ends_after_15_00():
+    """
+    Rule is about start time, not end time.
+    """
+    events = []
+    slots = suggest_slots(events, meeting_duration=60, day="fri")
+
+    assert "14:00" in slots  # ends 15:00
+    assert "14:15" in slots  # ends 15:15
+    assert "14:45" in slots  # ends 15:45
+    assert "15:00" not in slots
+
+
+def test_non_friday_has_no_15_00_cutoff():
+    events = []
+    slots = suggest_slots(events, meeting_duration=30, day="Thu")
+
+    assert "15:00" in slots
+    assert "16:30" in slots
+
+
+def test_friday_cutoff_respects_free_time_with_events():
+    """
+    Even if free after 15:00, starts are still blocked on Friday.
+    """
+    events = [{"start": "09:00", "end": "14:00"}]  # cooldown to 14:15
+    slots = suggest_slots(events, meeting_duration=30, day="Friday")
+
+    assert "14:15" in slots
+    assert "14:30" in slots
+    assert "14:45" in slots
+    assert "15:00" not in slots
+
+
+def test_friday_cutoff_can_make_schedule_empty():
+    events = []
+    slots = suggest_slots(events, meeting_duration=30, day="Friday")
+
+    # Remove everything before 15:00 with events
+    events = [{"start": "09:00", "end": "14:45"}]  # cooldown to 15:00
+    slots = suggest_slots(events, meeting_duration=30, day="Friday")
+
+    assert slots == []
+```
+"
+
+--------------------------------------------------

@@ -218,3 +218,57 @@ def test_duration_not_multiple_of_step_still_works():
     assert "09:00" in slots
     assert "16:45" not in slots  # 16:45–17:05 would exceed work end
     assert "16:30" in slots      # 16:30–16:50 fits
+
+def test_friday_cutoff_blocks_starts_at_and_after_15_00():
+    events = []
+    slots = suggest_slots(events, meeting_duration=30, day="Friday")
+
+    assert "14:45" in slots
+    assert "15:00" not in slots
+    assert "15:15" not in slots
+    assert "16:00" not in slots
+
+
+def test_friday_cutoff_allows_starts_before_15_00_if_meeting_ends_after_15_00():
+    """
+    Rule is about start time, not end time.
+    """
+    events = []
+    slots = suggest_slots(events, meeting_duration=60, day="fri")
+
+    assert "14:00" in slots  # ends 15:00
+    assert "14:15" in slots  # ends 15:15
+    assert "14:45" in slots  # ends 15:45
+    assert "15:00" not in slots
+
+
+def test_non_friday_has_no_15_00_cutoff():
+    events = []
+    slots = suggest_slots(events, meeting_duration=30, day="Thu")
+
+    assert "15:00" in slots
+    assert "16:30" in slots
+
+
+def test_friday_cutoff_respects_free_time_with_events():
+    """
+    Even if free after 15:00, starts are still blocked on Friday.
+    """
+    events = [{"start": "09:00", "end": "14:00"}]  # cooldown to 14:15
+    slots = suggest_slots(events, meeting_duration=30, day="Friday")
+
+    assert "14:15" in slots
+    assert "14:30" in slots
+    assert "14:45" in slots
+    assert "15:00" not in slots
+
+
+def test_friday_cutoff_can_make_schedule_empty():
+    events = []
+    slots = suggest_slots(events, meeting_duration=30, day="Friday")
+
+    # Remove everything before 15:00 with events
+    events = [{"start": "09:00", "end": "14:45"}]  # cooldown to 15:00
+    slots = suggest_slots(events, meeting_duration=30, day="Friday")
+
+    assert slots == []
